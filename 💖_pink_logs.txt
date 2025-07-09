@@ -1,0 +1,3 @@
+{'time': '2025-07-09T08:12:41.743335', 'method': 'GET', 'requested_url': 'http://127.0.0.1:5000/', 'from_IP': '127.0.0.1', 'body': ''}
+{'time': '2025-07-09T08:12:43.289768', 'method': 'GET', 'requested_url': 'http://127.0.0.1:5000/', 'from_IP': '127.0.0.1', 'body': ''}
+{'time': '2025-07-09T08:12:43.921316', 'method': 'GET', 'requested_url': 'http://127.0.0.1:5000/', 'from_IP': '127.0.0.1', 'body': ''}
