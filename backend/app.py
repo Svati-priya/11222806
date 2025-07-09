@@ -1,125 +1,129 @@
 from flask import Flask, request, jsonify, redirect
-from datetime import datetime, timedelta
-import re, string, random, platform
+from datetime import datetime, timedelta, timezone
+import string
+import random
+import re
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# 🧠 Memory-based sparkle storage (like a magic diary 💫)
-pink_links = {}
+# In-memory database
+url_store = {}  # shortcode: {url, expiry, clicks, creation_time, click_details}
 
-# 💌 Custom fancy logger
+# Middleware-based logging (custom, not using logging module)
 @app.before_request
 def log_request():
-    log = {
-        "time": datetime.utcnow().isoformat(),
-        "method": request.method,
-        "requested_url": request.url,
-        "from_IP": request.remote_addr,
-        "body": request.get_data(as_text=True)
-    }
-    with open("💖_pink_logs.txt", "a") as diary:
-        diary.write(str(log) + "\n")
+    with open('request_logs.txt', 'a') as f:
+        f.write(f"[{datetime.now(timezone.utc).isoformat()}] {request.method} {request.path} - {request.get_data(as_text=True)}\n")
 
-# ✨ Short & sweet code generator
-def sprinkle_code(length=6, prefix="glam"):
-    vibes = string.ascii_letters + string.digits
-    return f"{prefix}_{''.join(random.choices(vibes, k=length))}"
+# Utility functions
+def generate_shortcode(length=6):
+    characters = string.ascii_letters + string.digits
+    while True:
+        code = ''.join(random.choices(characters, k=length))
+        if code not in url_store:
+            return code
 
-# 🔍 Pretty URL checker
-def is_pretty_url(url):
-    pattern = re.compile(
-        r'^(https?:\/\/)'  # http or https
+def is_valid_url(url):
+    regex = re.compile(
+        r'^(https?:\/\/)'  # http:// or https://
         r'(([\w\-]+\.)+[\w]{2,})'  # domain
-        r'([\w\-\.\/~%]*)*$',  # path
+        r'([\w\-\.\/~%]*)*$',
         re.IGNORECASE
     )
-    return re.match(pattern, url) is not None
+    return re.match(regex, url) is not None
 
-# 💗 Create a sparkly short URL
+# API: Create Short URL
 @app.route('/shorturls', methods=['POST'])
-def create_sparkly_url():
+def create_short_url():
     data = request.get_json()
     if not data or 'url' not in data:
-        return jsonify({"💔 oops": "Missing the URL field, hun!"}), 400
+        return jsonify({"error": "Missing required 'url' field."}), 400
 
-    original = data['url']
-    if not is_pretty_url(original):
-        return jsonify({"🚫 nope": "Hmm... That doesn't look like a valid URL!"}), 400
+    url = data['url']
+    validity = data.get('validity', 30)
+    shortcode = data.get('shortcode')
 
-    life_minutes = int(data.get('validity', 30))
-    code = data.get('shortcode')
+    if not is_valid_url(url):
+        return jsonify({"error": "Invalid URL format."}), 400
 
-    if code:
-        if not re.match(r'^[a-zA-Z0-9]{1,20}$', code):
-            return jsonify({"⚠️ uh-oh": "Shortcode must be cute, alphanumeric, and max 20 chars!"}), 400
-        if code in pink_links:
-            return jsonify({"😿": "That shortcode is already taken. Try another glam one!"}), 409
+    try:
+        validity = int(validity)
+    except:
+        return jsonify({"error": "Validity must be an integer."}), 400
+
+    if shortcode:
+        if not re.fullmatch(r'^[a-zA-Z0-9]{1,20}$', shortcode):
+            return jsonify({"error": "Shortcode must be alphanumeric and up to 20 characters."}), 400
+        if shortcode in url_store:
+            return jsonify({"error": "Shortcode already exists."}), 409
     else:
-        code = sprinkle_code()
+        shortcode = generate_shortcode()
 
-    expires_at = datetime.utcnow() + timedelta(minutes=life_minutes)
-
-    pink_links[code] = {
-        "original": original,
-        "expires": expires_at,
-        "created": datetime.utcnow(),
-        "visits": 0,
-        "vibes": []
+    expiry = datetime.now(timezone.utc) + timedelta(minutes=validity)
+    url_store[shortcode] = {
+        'url': url,
+        'expiry': expiry,
+        'creation_time': datetime.now(timezone.utc),
+        'clicks': 0,
+        'click_details': []
     }
 
     return jsonify({
-        "✨Your PinkLink✨": f"http://localhost:5000/{code}",
-        "⏳Expires on": expires_at.isoformat() + 'Z',
-        "🧭Time left (sec)": int((expires_at - datetime.utcnow()).total_seconds())
+        "shortLink": f"http://localhost:5000/{shortcode}",
+        "expiry": expiry.isoformat() + 'Z'
     }), 201
 
-# 🌈 Redirect to original link
-@app.route('/<code>', methods=['GET'])
-def open_magic_link(code):
-    sparkle = pink_links.get(code)
-    if not sparkle:
-        return jsonify({"😢": "No sparkle found for that code."}), 404
+# API: Redirect
+@app.route('/<shortcode>', methods=['GET'])
+def redirect_short_url(shortcode):
+    entry = url_store.get(shortcode)
+    if not entry:
+        return jsonify({"error": "Shortcode not found."}), 404
 
-    if datetime.utcnow() > sparkle['expires']:
-        return jsonify({"⌛": "Oops! This PinkLink has faded away."}), 410
+    if datetime.utcnow() > entry['expiry']:
+        return jsonify({"error": "Short link has expired."}), 410
 
-    sparkle['visits'] += 1
-    sparkle['vibes'].append({
-        "🌟 when": datetime.utcnow().isoformat() + 'Z',
-        "📱 from": request.headers.get('User-Agent', 'unknown'),
-        "💻 platform": platform.system(),
-        "📍 IP": request.remote_addr
+    # Track click
+    entry['clicks'] += 1
+    entry['click_details'].append({
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'source': request.headers.get('Referer', 'unknown'),
+        'location': request.remote_addr  # coarse-grained
     })
 
-    return redirect(sparkle['original'], code=302)
+    return redirect(entry['url'], code=302)
 
-# 📊 Show click stats
-@app.route('/shorturls/<code>', methods=['GET'])
-def sparkle_stats(code):
-    sparkle = pink_links.get(code)
-    if not sparkle:
-        return jsonify({"😵": "No record found for that sparkly code."}), 404
+# API: Get Statistics for a Short URL
+@app.route('/shorturls/<shortcode>', methods=['GET'])
+def get_short_url_stats(shortcode):
+    entry = url_store.get(shortcode)
+    if not entry:
+        return jsonify({"error": "Shortcode not found."}), 404
 
     return jsonify({
-        "🔗 Original": sparkle['original'],
-        "🗓️ Expires": sparkle['expires'].isoformat() + 'Z',
-        "👀 Visits": sparkle['visits'],
-        "📍 Visitors": sparkle['vibes']
+        "shortLink": f"http://localhost:5000/{shortcode}",
+        "originalURL": entry['url'],
+        "creationTime": entry['creation_time'].isoformat() + 'Z',
+        "expiry": entry['expiry'].isoformat() + 'Z',
+        "clicks": entry['clicks'],
+        "clickDetails": entry['click_details']
     }), 200
 
-# 🧾 Show all pink links
+# API: Get All Short URLs (For URL Statistics Page)
 @app.route('/shorturls', methods=['GET'])
-def show_all_pinklinks():
-    return jsonify([
-        {
-            "💫 code": alias,
-            "🔗 link": data['original'],
-            "📅 expires": data['expires'].isoformat() + 'Z',
-            "👣 clicks": data['visits']
-        }
-        for alias, data in pink_links.items()
-    ]), 200
+def get_all_short_urls():
+    result = []
+    for code, entry in url_store.items():
+        result.append({
+            "shortLink": f"http://localhost:5000/{code}",
+            "originalURL": entry['url'],
+            "creationTime": entry['creation_time'].isoformat() + 'Z',
+            "expiry": entry['expiry'].isoformat() + 'Z',
+            "clicks": entry['clicks']
+        })
+    return jsonify(result), 200
 
-# 💖 Run the magic
 if __name__ == '__main__':
     app.run(debug=True)
